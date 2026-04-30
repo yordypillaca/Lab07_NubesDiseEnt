@@ -94,8 +94,3 @@ Invoke-RestMethod -Method Delete -Uri http://localhost/items/1 `
 Invoke-RestMethod -Method Delete -Uri http://localhost/api/items/1 `
   -Headers @{ Authorization = "Bearer $token" }
 ```
-
-## Parte B: AWS (Application Load Balancer)
-
-En la Parte B levantaremos 2 EC2 en subnets distintas y un **ALB HTTP:80** que balancea hacia ellas con health checks.
-
