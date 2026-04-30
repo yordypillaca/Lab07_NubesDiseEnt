@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Lab07 - Login + CRUD + Balanceo</title>
+    <style>
+      * { box-sizing: border-box; }
+      body { margin: 0; font-family: Arial, sans-serif; background: #fff; color: #000; }
+      .wrap { max-width: 980px; margin: 20px auto; padding: 0 12px; }
+      .card { border: 1px solid #ccc; padding: 12px; max-width: 100%; overflow: hidden; }
+      h1 { margin: 0 0 10px; font-size: 18px; }
+      h2 { margin: 0 0 8px; font-size: 14px; font-weight: bold; }
+      .center { min-height: 100vh; display:flex; align-items:center; justify-content:center; }
+      .hide { display:none !important; }
+      label { display:block; font-size: 12px; margin: 8px 0 4px; }
+      input { width: 100%; padding: 8px; border: 1px solid #aaa; max-width: 100%; }
+      .row { display:flex; gap: 8px; align-items:center; flex-wrap: wrap; }
+      button { padding: 8px 10px; border: 1px solid #444; background:#f2f2f2; cursor:pointer; }
+      button.secondary { border-color: #777; }
+      button.danger { border-color: #a00; }
+      .pill { display:inline-block; padding: 2px 6px; border: 1px solid #bbb; font-size: 12px; }
+      .mono { font-family: Consolas, monospace; }
+      .log { margin-top: 10px; border: 1px solid #ccc; padding: 8px; min-height: 40px; max-height: 160px; overflow:auto; white-space: pre-wrap; }
+      .log .err { color: #a00; }
+      .tableWrap { width: 100%; overflow-x: auto; }
+      table { width:100%; border-collapse: collapse; margin-top: 10px; }
+      th, td { border: 1px solid #ccc; padding: 6px; text-align:left; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <!-- Pantalla: Login -->
+      <div id="screenLogin" class="center">
+        <div class="card" style="width: 340px; max-width: 100%;">
+          <h1 style="margin:0 0 10px;">Login</h1>
+          <label>Usuario</label>
+          <input id="user" value="admin" />
+          <label>Password</label>
+          <input id="pass" type="password" value="admin" />
+          <div class="row" style="margin-top:10px;">
+            <button id="btnLogin">Ingresar</button>
+          </div>
+          <div class="log mono" id="loginLog" style="min-height: 24px;"></div>
+        </div>
+      </div>
+
+      <!-- Pantalla: Dashboard -->
+      <div id="screenApp" class="hide">
+        <div class="card">
+          <div class="row" style="justify-content: space-between;">
+            <h2>Backends (selección directa)</h2>
+            <div class="row">
+              <button class="secondary" id="btnLogout">Logout</button>
+              <span class="pill">Token: <span class="mono" id="tokenState">-</span></span>
+            </div>
+          </div>
+
+          <div class="row" style="margin-top:10px;">
+            <button id="btnB1">Backend 1</button>
+            <button id="btnB2">Backend 2</button>
+            <button id="btnB3">Backend 3</button>
+            <button class="secondary" id="btnLbHello">Probar balanceo (LB) x10</button>
+          </div>
+
+          <div class="log mono" id="helloLog"></div>
+        </div>
+
+        <div class="card" style="margin-top:16px;">
+          <h2>CRUD Items (vía Load Balancer /api)</h2>
+          <div class="row">
+            <div style="flex:1; min-width: 220px;">
+              <label>Nombre</label>
+              <input id="itemName" placeholder="Laptop" />
+            </div>
+            <div style="flex:2; min-width: 260px;">
+              <label>Descripción</label>
+              <input id="itemDesc" placeholder="Dell" />
+            </div>
+          </div>
+          <div class="row" style="margin-top:10px;">
+            <button id="btnCreate">Crear</button>
+            <button class="secondary" id="btnList">Listar</button>
+            <button class="secondary" id="btnUpdate">Actualizar ID</button>
+            <input id="itemId" style="width:110px;" placeholder="ID" />
+            <button class="danger" id="btnDelete">Eliminar ID</button>
+          </div>
+          <div class="log mono" id="crudLog"></div>
+          <div class="tableWrap">
+            <table id="itemsTable" style="display:none;">
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Nombre</th>
+                  <th>Descripción</th>
+                  <th>Instancia</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const API = "/api";
+      const els = (id) => document.getElementById(id);
+      const screenLogin = els("screenLogin");
+      const screenApp = els("screenApp");
+      const helloLog = els("helloLog");
+      const loginLog = els("loginLog");
+      const crudLog = els("crudLog");
+      const tokenState = els("tokenState");
+      const itemsTable = els("itemsTable");
+      const tbody = itemsTable.querySelector("tbody");
+
+      let token = localStorage.getItem("lab07_token") || "";
+      renderToken();
+      renderScreen();
+
+      function renderToken() {
+        tokenState.textContent = token ? "OK" : "vacío";
+      }
+
+      function renderScreen() {
+        const loggedIn = Boolean(token);
+        screenLogin.classList.toggle("hide", loggedIn);
+        screenApp.classList.toggle("hide", !loggedIn);
+      }
+
+      function log(el, msg, isErr=false) {
+        const line = document.createElement("div");
+        if (isErr) line.className = "err";
+        line.textContent = msg;
+        el.appendChild(line);
+        el.scrollTop = el.scrollHeight;
+      }
+
+      async function api(path, opts={}) {
+        const headers = opts.headers || {};
+        if (token) headers["Authorization"] = "Bearer " + token;
+        return fetch(API + path, { ...opts, headers });
+      }
+
+      async function tryJson(res) {
+        const txt = await res.text();
+        try { return JSON.parse(txt); } catch { return { raw: txt }; }
+      }
+
+      async function helloFrom(prefix) {
+        helloLog.textContent = "";
+        try {
+          const res = await fetch(prefix + "/hello");
+          const data = await tryJson(res);
+          if (!res.ok) throw new Error(data.detail || "Hello failed");
+          log(helloLog, `${data.message} (instance=${data.instance})`);
+        } catch (e) {
+          log(helloLog, `Error: ${e.message || e}`, true);
+        }
+      }
+
+      els("btnB1").addEventListener("click", () => helloFrom("/backend1"));
+      els("btnB2").addEventListener("click", () => helloFrom("/backend2"));
+      els("btnB3").addEventListener("click", () => helloFrom("/backend3"));
+
+      els("btnLbHello").addEventListener("click", async () => {
+        helloLog.textContent = "";
+        for (let i=0; i<10; i++) {
+          try {
+            const res = await api("/hello");
+            const data = await tryJson(res);
+            log(helloLog, `${i+1}. ${data.message} (instance=${data.instance})`);
+          } catch (e) {
+            log(helloLog, `Error: ${e.message || e}`, true);
+          }
+        }
+      });
+
+      els("btnLogin").addEventListener("click", async () => {
+        loginLog.textContent = "";
+        try {
+          const body = JSON.stringify({ username: els("user").value, password: els("pass").value });
+          const res = await api("/login", { method:"POST", headers: { "Content-Type":"application/json" }, body });
+          const data = await tryJson(res);
+          if (!res.ok) throw new Error(data.detail || "Login failed");
+          token = data.token;
+          localStorage.setItem("lab07_token", token);
+          renderToken();
+          renderScreen();
+          log(loginLog, `Login OK (instance=${data.instance})`);
+          helloLog.textContent = "";
+          crudLog.textContent = "";
+        } catch (e) {
+          log(loginLog, `Error: ${e.message || e}`, true);
+        }
+      });
+
+      els("btnLogout").addEventListener("click", () => {
+        token = "";
+        localStorage.removeItem("lab07_token");
+        renderToken();
+        renderScreen();
+        loginLog.textContent = "";
+        helloLog.textContent = "";
+        crudLog.textContent = "";
+        itemsTable.style.display = "none";
+        log(loginLog, "Logout OK");
+      });
+
+      function renderItems(items) {
+        tbody.innerHTML = "";
+        if (!Array.isArray(items) || items.length === 0) {
+          itemsTable.style.display = "none";
+          return;
+        }
+        itemsTable.style.display = "";
+        for (const it of items) {
+          const tr = document.createElement("tr");
+          tr.innerHTML = `<td>${it.id}</td><td>${it.name}</td><td>${it.description}</td><td class="mono">${it.instance}</td>`;
+          tbody.appendChild(tr);
+        }
+      }
+
+      async function listItems() {
+        const res = await api("/items");
+        const data = await tryJson(res);
+        if (!res.ok) throw new Error(data.detail || "List failed");
+        renderItems(data);
+        return data;
+      }
+
+      els("btnList").addEventListener("click", async () => {
+        crudLog.textContent = "";
+        try {
+          const items = await listItems();
+          log(crudLog, `OK: ${items.length} item(s)`);
+        } catch (e) {
+          log(crudLog, `Error: ${e.message || e}`, true);
+        }
+      });
+
+      els("btnCreate").addEventListener("click", async () => {
+        crudLog.textContent = "";
+        try {
+          const body = JSON.stringify({ name: els("itemName").value, description: els("itemDesc").value });
+          const res = await api("/items", { method:"POST", headers: { "Content-Type":"application/json" }, body });
+          const data = await tryJson(res);
+          if (!res.ok) throw new Error(data.detail || "Create failed");
+          log(crudLog, `Creado ID=${data.id} (instance=${data.instance})`);
+          await listItems();
+        } catch (e) {
+          log(crudLog, `Error: ${e.message || e}`, true);
+        }
+      });
+
+      els("btnUpdate").addEventListener("click", async () => {
+        crudLog.textContent = "";
+        try {
+          const id = els("itemId").value.trim();
+          if (!id) throw new Error("Ingresa un ID");
+          const body = JSON.stringify({ name: els("itemName").value, description: els("itemDesc").value });
+          const res = await api(`/items/${encodeURIComponent(id)}`, { method:"PUT", headers: { "Content-Type":"application/json" }, body });
+          const data = await tryJson(res);
+          if (!res.ok) throw new Error(data.detail || "Update failed");
+          log(crudLog, `Actualizado ID=${data.id} (instance=${data.instance})`);
+          await listItems();
+        } catch (e) {
+          log(crudLog, `Error: ${e.message || e}`, true);
+        }
+      });
+
+      els("btnDelete").addEventListener("click", async () => {
+        crudLog.textContent = "";
+        try {
+          const id = els("itemId").value.trim();
+          if (!id) throw new Error("Ingresa un ID");
+          const res = await api(`/items/${encodeURIComponent(id)}`, { method:"DELETE" });
+          if (!res.ok) {
+            const data = await tryJson(res);
+            throw new Error(data.detail || "Delete failed");
+          }
+          log(crudLog, `Eliminado ID=${id}`);
+          await listItems();
+        } catch (e) {
+          log(crudLog, `Error: ${e.message || e}`, true);
+        }
+      });
+    </script>
+  </body>
+</html>
+
